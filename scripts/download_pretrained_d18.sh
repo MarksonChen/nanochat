@@ -1,0 +1,14 @@
+mkdir -p ~/.cache/nanochat/base_checkpoints/d18
+python -c "
+from huggingface_hub import hf_hub_download
+import shutil, os
+repo = 'destinefut/nanochat-d18-pretrain'
+dest = os.path.expanduser('~/.cache/nanochat/base_checkpoints/d18')
+tok_dest = os.path.expanduser('~/.cache/nanochat/tokenizer')
+os.makedirs(tok_dest, exist_ok=True)
+for f in ['model_002849.pt', 'meta_002849.json']:
+    shutil.copy(hf_hub_download(repo, f), os.path.join(dest, f))
+for f in ['tokenizer.pkl', 'token_bytes.pt']:
+    shutil.copy(hf_hub_download(repo, f), os.path.join(tok_dest, f))
+print('Done')
+"
