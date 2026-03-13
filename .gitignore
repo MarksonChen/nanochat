@@ -7,6 +7,7 @@ eval_bundle/
 
 # Secrets
 .env
+scripts/run_sft_on_cloud.md
 
 # Local setup
 CLAUDE.md

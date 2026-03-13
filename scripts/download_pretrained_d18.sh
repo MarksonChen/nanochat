@@ -1,5 +1,5 @@
 mkdir -p ~/.cache/nanochat/base_checkpoints/d18
-uv python -c "
+uv run python -c "
 from huggingface_hub import hf_hub_download
 import shutil, os
 repo = 'destinefut/nanochat-d18-pretrain'
