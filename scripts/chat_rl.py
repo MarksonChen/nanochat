@@ -25,7 +25,7 @@ import torch.distributed as dist
 from nanochat.common import compute_init, compute_cleanup, print0, get_base_dir, DummyWandb, autodetect_device_type
 from nanochat.checkpoint_manager import save_checkpoint, load_model
 from nanochat.engine import Engine
-from tasks.gsm8k import GSM8K
+from tasks.gsm8k import GSM8K, GSM_RE, extract_answer
 
 # -----------------------------------------------------------------------------
 # CLI arguments
@@ -57,6 +57,9 @@ parser.add_argument("--init-lr-frac", type=float, default=0.05, help="initial LR
 parser.add_argument("--eval-every", type=int, default=60, help="evaluate pass@k every N steps")
 parser.add_argument("--eval-examples", type=int, default=400, help="number of examples for pass@k evaluation")
 parser.add_argument("--save-every", type=int, default=60, help="save checkpoint every N steps")
+# Reward shaping
+parser.add_argument("--format-reward", action="store_true", help="enable format reward (exactly one #### answer on the final line)")
+parser.add_argument("--self-consistency", action="store_true", help="enable self-consistency reward across samples")
 args = parser.parse_args()
 user_config = vars(args).copy()
 # -----------------------------------------------------------------------------
@@ -81,6 +84,24 @@ train_task = GSM8K(subset="main", split="train")
 val_task = GSM8K(subset="main", split="test")
 num_steps = (len(train_task) // args.examples_per_step) * args.num_epochs
 print0(f"Calculated number of steps: {num_steps}")
+
+def format_reward(text):
+    """1.0 if there is exactly one #### answer and it is on the final line, else 0.0."""
+    matches = GSM_RE.findall(text)
+    if len(matches) != 1:
+        return 0.0
+    last_line = text.strip().splitlines()[-1]
+    if GSM_RE.search(last_line):
+        return 1.0
+    return 0.0
+
+def self_consistency_reward(extracted_answers, i):
+    """R_sc,i = (1/K) * sum_j 1[a_j == a_i]. Returns 0 if a_i is None."""
+    a_i = extracted_answers[i]
+    if a_i is None:
+        return 0.0
+    K = len(extracted_answers)
+    return sum(1 for a_j in extracted_answers if a_j == a_i) / K
 
 @torch.no_grad()
 def get_batch():
@@ -116,14 +137,23 @@ def get_batch():
 
         # Calculate the rewards for each sample
         rewards = []
+        extracted_answers = []
         for sample_tokens in generated_token_sequences:
             # Get just the generated tokens (after the prompt)
             generated_tokens = sample_tokens[prefix_length:]
             # Decode the generated response
             generated_text = tokenizer.decode(generated_tokens)
-            # Calculate the reward
-            reward = train_task.reward(conversation, generated_text)
-            rewards.append(reward)
+            # Correctness reward (weight 1.0)
+            r = train_task.reward(conversation, generated_text)
+            # Format reward (weight 0.02)
+            if args.format_reward:
+                r += 0.02 * format_reward(generated_text)
+            rewards.append(r)
+            extracted_answers.append(extract_answer(generated_text))
+        # Self-consistency reward (weight 0.05) — requires all answers first
+        if args.self_consistency:
+            for i in range(len(rewards)):
+                rewards[i] += 0.05 * self_consistency_reward(extracted_answers, i)
 
         # Pad the sequences so that their lengths (in time) match
         max_length = max(len(seq) for seq in generated_token_sequences)
